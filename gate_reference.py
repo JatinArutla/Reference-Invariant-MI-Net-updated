@@ -56,6 +56,9 @@ from src.datamodules.bci2a import load_LOSO_pool, load_subject_dependent
 from src.datamodules.transforms import fit_standardizer, apply_standardizer
 from src.models.model import build_atcnet
 
+from tensorflow.keras.utils import Sequence as KSequence
+from src.datamodules.ref_jitter import RefJitterSequence
+
 
 def set_seed(seed: int = 1):
     import random
@@ -240,15 +243,24 @@ def train_one(args, X_tr: np.ndarray, y_tr: np.ndarray, X_va: np.ndarray, y_va: 
     if args.early_stop:
         cbs.append(EarlyStopping(monitor="val_loss", patience=args.patience, mode="min", restore_best_weights=False, verbose=0))
 
-    model.fit(
-        _reshape_for_model(X_tr), y_tr,
-        validation_data=(_reshape_for_model(X_va), y_va),
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        shuffle=False,
-        verbose=0,
-        callbacks=cbs,
-    )
+    if isinstance(X_tr, KSequence):
+        model.fit(
+            X_tr,
+            validation_data=(_reshape_for_model(X_va), y_va),
+            epochs=args.epochs,
+            verbose=0,
+            callbacks=cbs,
+        )
+    else:
+        model.fit(
+            _reshape_for_model(X_tr), y_tr,
+            validation_data=(_reshape_for_model(X_va), y_va),
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            shuffle=False,
+            verbose=0,
+            callbacks=cbs,
+        )
     return ckpt_path
 
 
@@ -270,25 +282,37 @@ def run(args):
     if not test_modes:
         raise ValueError("--test_ref_modes must be a comma-separated list (e.g., 'native,car,ref,laplacian').")
 
-    # training conditions: either fixed mode(s), or one mixed-reference baseline.
+    # training conditions: either fixed mode(s), or one mixed-reference baseline, or jitter baseline.
     train_modes = [m.strip() for m in args.train_ref_modes.split(",") if m.strip()]
     if not train_modes:
         raise ValueError("--train_ref_modes must be non-empty.")
 
-    train_conds = ["mix"] if args.mix_train_refs else train_modes
+    if args.mix_train_refs and args.jitter_train_refs:
+        raise ValueError("Pick only one of --mix_train_refs or --jitter_train_refs.")
+
+    train_conds = ["mix"] if args.mix_train_refs else (["jitter"] if args.jitter_train_refs else train_modes)
 
     # output containers
     results: Dict[str, Dict[str, List[float]]] = {c: {tm: [] for tm in test_modes} for c in train_conds}
 
+    # parse jitter modes (if empty, reuse train_modes)
+    jitter_modes = [m.strip() for m in args.jitter_ref_modes.split(",") if m.strip()] if args.jitter_ref_modes else train_modes
+
     for sub in range(1, args.n_sub + 1):
         for cond in train_conds:
-            # build training set
+
             if cond == "mix":
                 X_tr_raw, y_tr_raw = _maybe_mixed_ref_training(args, sub, ref_modes_train=train_modes)
+
+            elif cond == "jitter":
+                # base data you jitter FROM, pick one fixed mode (native is simplest)
+                (X_tr_raw, y_tr_raw), _ = _load_train_and_test(args, sub, ref_mode_train="native", ref_mode_test="native")
+
             else:
                 (X_tr_raw, y_tr_raw), _ = _load_train_and_test(args, sub, ref_mode_train=cond, ref_mode_test=cond)
 
             args.n_channels = int(X_tr_raw.shape[1])
+            args.in_samples = int(X_tr_raw.shape[2])
 
             y_oh = to_categorical(y_tr_raw, num_classes=args.n_classes)
             X_tr_raw, X_va_raw, y_tr, y_va = train_test_split(
@@ -299,18 +323,46 @@ def run(args):
                 stratify=y_oh.argmax(-1),
             )
 
-            # fit standardizer on TRAIN only, then apply to VAL and every TEST mode
-            X_tr, X_va = _fit_and_apply_standardization(args, X_tr_raw, X_va_raw)
-
-            exp_dir = os.path.join(args.results_dir, f"sub_{sub:02d}", f"train_{cond}")
-            weights_path = train_one(args, X_tr, y_tr, X_va, y_va, exp_dir)
-
-            # cache train stats once
+            # standardizer stats
             mu_sd = None
             if args.standardize:
-                mu_sd = fit_standardizer(X_tr_raw)
+                if cond == "jitter":
+                    # fit on a mixed pool so the scaler matches what jitter will produce
+                    X_stats, _ = _maybe_mixed_ref_training(args, sub, ref_modes_train=jitter_modes)
+                    mu_sd = fit_standardizer(X_stats)
+                else:
+                    mu_sd = fit_standardizer(X_tr_raw)
 
-            # evaluate across test reference modes
+            # build training input
+            if cond == "jitter":
+                mu, sd = mu_sd if mu_sd is not None else (None, None)
+                train_in = RefJitterSequence(
+                    X_tr_raw, y_tr,
+                    batch_size=args.batch_size,
+                    ref_modes=jitter_modes,
+                    ref_channel=args.ref_channel,
+                    laplacian=args.laplacian,
+                    keep_channels=args.keep_channels,
+                    mu=mu, sd=sd,
+                    shuffle=True,
+                    seed=args.seed,
+                )
+                # validation must be a normal tensor
+                if mu_sd is not None:
+                    mu, sd = mu_sd
+                    X_va = apply_standardizer(X_va_raw, mu, sd)
+                else:
+                    X_va = X_va_raw.astype(np.float32)
+            else:
+                # normal training
+                X_tr = apply_standardizer(X_tr_raw, *mu_sd) if mu_sd is not None else X_tr_raw.astype(np.float32)
+                X_va = apply_standardizer(X_va_raw, *mu_sd) if mu_sd is not None else X_va_raw.astype(np.float32)
+                train_in = X_tr
+
+            exp_dir = os.path.join(args.results_dir, f"sub_{sub:02d}", f"train_{cond}")
+            weights_path = train_one(args, train_in, y_tr, X_va, y_va, exp_dir)
+
+            # evaluate across test reference modes, using the SAME mu_sd
             for te_mode in test_modes:
                 X_te_raw, y_te = _load_test_only(args, sub, ref_mode_test=te_mode)
                 if mu_sd is not None:
@@ -358,6 +410,8 @@ def parse_args():
     p.add_argument("--train_ref_modes", type=str, default="native", help="Comma-separated train mode(s).")
     p.add_argument("--test_ref_modes", type=str, default="native,car,ref,laplacian", help="Comma-separated test modes.")
     p.add_argument("--mix_train_refs", action="store_true", help="Train on a mixture (concatenation) of all train_ref_modes.")
+    p.add_argument("--jitter_train_refs", action="store_true", help="Train with per-sample reference jitter (no concatenation).")
+    p.add_argument("--jitter_ref_modes", type=str, default="", help="Comma-separated modes used for jitter. If empty, uses train_ref_modes.")
     p.add_argument("--keep_channels", type=str, default="", help="Comma-separated channel names to keep (intersection baseline).")
     p.add_argument("--ref_channel", type=str, default="Cz", help="Channel for ref-mode re-referencing.")
     p.add_argument("--laplacian", action="store_true", help="Enable Laplacian neighbor graph.")

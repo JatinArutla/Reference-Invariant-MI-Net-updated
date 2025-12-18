@@ -96,6 +96,8 @@ def make_ssl_dataset(
     in_samples: int,
     batch_size: int = 256,
     shuffle: bool = True,
+    seed: int = 1,
+    deterministic: bool = True,
     view_mode: str = "aug",              # "aug" (default) or "ref" or "ref+aug"
     ref_modes: list[str] | None = None,
     ref_idx: int | None = None,
@@ -103,16 +105,12 @@ def make_ssl_dataset(
 ) -> tf.data.Dataset:
     N, C, T = X.shape
     assert C == n_channels and T == in_samples
+    
+    Xf = X.astype(np.float32, copy=False)
+    ds = tf.data.Dataset.from_tensor_slices(Xf)
+    if shuffle:
+        ds = ds.shuffle(buffer_size=N, seed=seed, reshuffle_each_iteration=True)
 
-    def gen():
-        idx = np.arange(N)
-        if shuffle: np.random.shuffle(idx)
-        for i in idx:
-            yield X[i].astype(np.float32, copy=False)
-
-    ds = tf.data.Dataset.from_generator(
-        gen, output_signature=tf.TensorSpec(shape=(n_channels, in_samples), dtype=tf.float32)
-    )
     view_mode_l = (view_mode or "aug").lower()
     if view_mode_l in ("aug", "augs"):
         mapper = lambda x: tf.numpy_function(_two_views_np, [x], Tout=(tf.float32, tf.float32))
@@ -131,15 +129,25 @@ def make_ssl_dataset(
     else:
         raise ValueError(f"Unknown view_mode: {view_mode}")
 
-    ds = ds.map(mapper, num_parallel_calls=tf.data.AUTOTUNE)
+    if deterministic:
+        opts = tf.data.Options()
+        opts.experimental_deterministic = True
+        ds = ds.with_options(opts)
+        num_calls = 1
+        prefetch = 1
+    else:
+        num_calls = tf.data.AUTOTUNE
+        prefetch = tf.data.AUTOTUNE
+
+    ds = ds.map(mapper, num_parallel_calls=num_calls)
     ds = ds.map(
         lambda v1, v2: (
             tf.ensure_shape(v1, (n_channels, in_samples)),
             tf.ensure_shape(v2, (n_channels, in_samples))
         ),
-        num_parallel_calls=tf.data.AUTOTUNE
+        num_parallel_calls=num_calls
     )
     ds = ds.map(lambda v1, v2: (tf.expand_dims(v1, 0), tf.expand_dims(v2, 0)),  # -> [1,C,T]
-                num_parallel_calls=tf.data.AUTOTUNE)
-    ds = ds.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
+                num_parallel_calls=num_calls)
+    ds = ds.batch(batch_size, drop_remainder=True).prefetch(prefetch)
     return ds

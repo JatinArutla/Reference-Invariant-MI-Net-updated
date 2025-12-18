@@ -47,7 +47,7 @@ def _maybe_load_ssl(model: tf.keras.Model, ssl_template: str, subject: int) -> N
         if candidates:
             path = candidates[-1]
     if os.path.exists(path):
-        model.load_weights(path)
+        model.load_weights(path, by_name=True, skip_mismatch=True)
 
 def build_model(args) -> tf.keras.Model:
     return build_atcnet(

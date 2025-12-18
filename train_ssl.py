@@ -165,6 +165,8 @@ def run_loso(args):
         ds = make_ssl_dataset(
             X_src, n_channels=args.n_channels, in_samples=args.in_samples,
             batch_size=args.batch_size, shuffle=True,
+            seed=args.seed,
+            deterministic=True,
             view_mode=args.view_mode,
             ref_modes=ref_params["ref_modes"],
             ref_idx=ref_params["ref_idx"],
