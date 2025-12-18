@@ -104,12 +104,39 @@ def _eigh_inv_sqrt(M: np.ndarray, eps: float = 1e-10) -> np.ndarray:
     w, v = np.linalg.eigh(M + eps * np.eye(M.shape[0], dtype=M.dtype))
     return v @ np.diag(1.0 / np.sqrt(w)) @ v.T
 
-def ea_align_trials(X: np.ndarray) -> np.ndarray:
-    """EA for one subject/session block. X: [N,C,T] -> [N,C,T]."""
+
+def ea_fit(X: np.ndarray) -> np.ndarray:
+    """Fit Euclidean Alignment (EA) matrix for one block.
+
+    EA is defined by the inverse square-root of the mean trial covariance.
+    The returned matrix W is applied as: x_aligned = W @ x.
+
+    X: [N,C,T]
+    Returns: W [C,C]
+    """
     covs = [x @ x.T / x.shape[1] for x in X]
     Rbar = np.mean(covs, axis=0)
     W = _eigh_inv_sqrt(Rbar.astype(np.float64)).astype(np.float32)
-    return np.asarray([W @ x for x in X], dtype=np.float32)
+    return W
+
+
+def ea_apply(X: np.ndarray, W: np.ndarray) -> np.ndarray:
+    """Apply a pre-fit EA matrix W to X.
+
+    Supports:
+      - X [N,C,T]
+      - X [C,T]
+    """
+    if X.ndim == 3:
+        return np.asarray([W @ x for x in X], dtype=np.float32)
+    if X.ndim == 2:
+        return (W @ X).astype(np.float32)
+    raise ValueError(f"ea_apply expects 2D/3D array, got {X.ndim}D")
+
+def ea_align_trials(X: np.ndarray) -> np.ndarray:
+    """EA for one subject/session block. X: [N,C,T] -> [N,C,T]."""
+    W = ea_fit(X)
+    return ea_apply(X, W)
 
 def fit_standardizer(X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Channel-wise z-score stats. 3D: mean/std over (N,T). 4D: over (N,M,T)."""
