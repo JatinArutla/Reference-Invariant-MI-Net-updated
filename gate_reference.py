@@ -23,6 +23,7 @@ import json
 from typing import Dict, List, Tuple
 
 # Determinism knobs (must be set before TF import)
+os.environ.setdefault("TF_DISABLE_LAYOUT_OPTIMIZER", "1")
 os.environ["TF_DISABLE_LAYOUT_OPTIMIZER"] = "1"
 os.environ["TF_DETERMINISTIC_OPS"] = "1"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
@@ -35,6 +36,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
 
 import numpy as np
 import tensorflow as tf
+
+tf.config.optimizer.set_experimental_options({"layout_optimizer": False})
 
 tf.keras.backend.set_image_data_format("channels_last")
 try:
