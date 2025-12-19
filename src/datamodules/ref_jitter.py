@@ -16,7 +16,9 @@ class RefJitterSequence(Sequence):
         mu=None, sd=None,
         shuffle=True,
         seed: int = 1,
+        **kwargs
     ):
+        super().__init__(**kwargs)
         self.seed = int(seed)
         self.epoch = 0
         self.X = X.astype(np.float32, copy=False)   # [N,C,T]
