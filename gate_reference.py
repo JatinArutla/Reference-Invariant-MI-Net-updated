@@ -130,6 +130,7 @@ def _maybe_load_ssl(model: tf.keras.Model, ssl_template: str, subject: int) -> s
         return ""
     # model.load_weights(wpath, skip_mismatch=True)
     model.load_weights(wpath)
+    print('SSL weights loaded - _maybe_load_ssl')
     return wpath
 
 def _load_train_and_test(
