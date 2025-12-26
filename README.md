@@ -51,13 +51,3 @@ Results are written to:
   * view modes:
     * `aug` (standard augmentations)
     * `ref+aug` (positive pair is the same trial under two reference transforms, optionally with augmentations)
-
-## Reproducibility notes
-
-* Determinism flags are set at the top of `gate_reference.py` and `train_ssl.py`.
-* Dropout layers do **not** hard-code seeds. Runs are controlled via `--seed` + global `tf.random.set_seed(...)`.
-* Training order is shuffled **deterministically** (default `--train_shuffle`). This keeps comparisons fair between array-based training and Sequence-based jitter training.
-
-## License
-
-For research use. Add a formal license before public release.
