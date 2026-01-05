@@ -57,29 +57,26 @@ def load_bci2a_session(
     if keep_idx is not None:
         keep_names = [BCI2A_CH_NAMES[i] for i in keep_idx]
         X = subset_and_reorder(X, keep_idx)
-    # Optional: re-reference before any EA/standardization
-    current_names = keep_names if keep_names is not None else BCI2A_CH_NAMES
 
+    # Optional: re-reference before any EA/standardization
     ref_idx = None
     if (ref_mode or "").lower() in ("ref", "cz_ref", "channel_ref"):
         # Map ref channel name to index in the current channel order
+        current_names = keep_names if keep_names is not None else BCI2A_CH_NAMES
         ref_map = name_to_index(current_names)
         if ref_channel not in ref_map:
             raise ValueError(f"ref_channel '{ref_channel}' not in channels: {current_names}")
         ref_idx = ref_map[ref_channel]
 
     lap_neighbors = None
-    if laplacian or (ref_mode or "").lower() in ("laplacian", "lap", "local", "bipolar", "bip", "bipolar_nn"):
+    # Some reference operators require a neighbor graph.
+    if laplacian or (ref_mode or "").lower() in (
+        "laplacian", "lap", "local",
+        "bipolar", "bip", "bipolar_like",
+    ):
         lap_neighbors = neighbors_to_index_list(all_names=BCI2A_CH_NAMES, keep_names=keep_names)
 
-    drop_idx = None
-    if drop_channel:
-        drop_map = name_to_index(current_names)
-        if drop_channel not in drop_map:
-            raise ValueError(f"drop_channel '{drop_channel}' not in channels: {current_names}")
-        drop_idx = drop_map[drop_channel]
-
-    X = apply_reference(X, mode=ref_mode, ref_idx=ref_idx, lap_neighbors=lap_neighbors, drop_idx=drop_idx)
+    X = apply_reference(X, mode=ref_mode, ref_idx=ref_idx, lap_neighbors=lap_neighbors)
     return X, y
 
 def load_subject_dependent(
@@ -94,7 +91,6 @@ def load_subject_dependent(
     keep_channels: str | None = None,
     ref_channel: str = "Cz",
     laplacian: bool = False,
-    drop_channel: str | None = None,
 ) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
     """
     A0sT → train, A0sE → test. Optional EA and standardization (fit on train).
@@ -103,13 +99,13 @@ def load_subject_dependent(
         data_root, subject, True,
         t1_sec=t1_sec, t2_sec=t2_sec,
         ref_mode=ref_mode, keep_channels=keep_channels,
-        ref_channel=ref_channel, laplacian=laplacian, drop_channel=drop_channel,
+        ref_channel=ref_channel, laplacian=laplacian,
     )
     X_te, y_te = load_bci2a_session(
         data_root, subject, False,
         t1_sec=t1_sec, t2_sec=t2_sec,
         ref_mode=ref_mode, keep_channels=keep_channels,
-        ref_channel=ref_channel, laplacian=laplacian, drop_channel=drop_channel,
+        ref_channel=ref_channel, laplacian=laplacian,
     )
 
     if ea:
@@ -135,7 +131,6 @@ def load_LOSO_pool(
     keep_channels: str | None = None,
     ref_channel: str = "Cz",
     laplacian: bool = False,
-    drop_channel: str | None = None,
 ) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
     """
     Pool T+E per subject. Target subject kept separate. If `ea`, apply per block.
@@ -149,13 +144,13 @@ def load_LOSO_pool(
             data_root, s, True,
             t1_sec=t1_sec, t2_sec=t2_sec,
             ref_mode=ref_mode, keep_channels=keep_channels,
-            ref_channel=ref_channel, laplacian=laplacian, drop_channel=drop_channel,
+            ref_channel=ref_channel, laplacian=laplacian,
         )
         X2, y2 = load_bci2a_session(
             data_root, s, False,
             t1_sec=t1_sec, t2_sec=t2_sec,
             ref_mode=ref_mode, keep_channels=keep_channels,
-            ref_channel=ref_channel, laplacian=laplacian, drop_channel=drop_channel,
+            ref_channel=ref_channel, laplacian=laplacian,
         )
         X = np.concatenate([X1, X2], axis=0)
         y = np.concatenate([y1, y2], axis=0)

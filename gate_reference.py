@@ -30,12 +30,6 @@ os.environ["CUDA_VISIBLE_DEVICES"] = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
 import numpy as np
 import tensorflow as tf
 
-try:
-    # This silences a noisy Grappler warning on some TF builds (does not change numerics).
-    tf.config.optimizer.set_experimental_options({"layout_optimizer": False})
-except Exception:
-    pass
-
 tf.keras.backend.set_image_data_format("channels_last")
 try:
     tf.config.experimental.enable_op_determinism(True)
@@ -136,7 +130,6 @@ def _load_train_and_test(
     *,
     ref_mode_train: str,
     ref_mode_test: str,
-    drop_channel: str | None = None,
 ) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
     """Return (X_train,y_train), (X_test,y_test).
 
@@ -157,7 +150,6 @@ def _load_train_and_test(
             keep_channels=args.keep_channels,
             ref_channel=args.ref_channel,
             laplacian=args.laplacian,
-            drop_channel=drop_channel,
         )
         (_, _), (X_tgt_te, y_tgt_te) = load_LOSO_pool(
             args.data_root,
@@ -172,7 +164,6 @@ def _load_train_and_test(
             keep_channels=args.keep_channels,
             ref_channel=args.ref_channel,
             laplacian=args.laplacian,
-            drop_channel=drop_channel,
         )
         return (X_src_tr, y_src_tr), (X_tgt_te, y_tgt_te)
 
@@ -187,7 +178,6 @@ def _load_train_and_test(
         keep_channels=args.keep_channels,
         ref_channel=args.ref_channel,
         laplacian=args.laplacian,
-            drop_channel=drop_channel,
     )
     (_, _), (X_te, y_te) = load_subject_dependent(
         args.data_root,
@@ -200,12 +190,11 @@ def _load_train_and_test(
         keep_channels=args.keep_channels,
         ref_channel=args.ref_channel,
         laplacian=args.laplacian,
-            drop_channel=drop_channel,
     )
     return (X_tr, y_tr), (X_te, y_te)
 
 
-def _load_test_only(args, sub: int, *, ref_mode_test: str, drop_channel: str | None = None) -> Tuple[np.ndarray, np.ndarray]:
+def _load_test_only(args, sub: int, *, ref_mode_test: str) -> Tuple[np.ndarray, np.ndarray]:
     """Load the test block only (no standardization)."""
     if args.loso:
         (_, _), (X_tgt, y_tgt) = load_LOSO_pool(
@@ -221,7 +210,6 @@ def _load_test_only(args, sub: int, *, ref_mode_test: str, drop_channel: str | N
             keep_channels=args.keep_channels,
             ref_channel=args.ref_channel,
             laplacian=args.laplacian,
-            drop_channel=drop_channel,
         )
         return X_tgt, y_tgt
 
@@ -236,7 +224,6 @@ def _load_test_only(args, sub: int, *, ref_mode_test: str, drop_channel: str | N
         keep_channels=args.keep_channels,
         ref_channel=args.ref_channel,
         laplacian=args.laplacian,
-            drop_channel=drop_channel,
     )
     return X_te, y_te
 
@@ -296,31 +283,24 @@ def _current_channel_names(keep_channels: str | None) -> List[str]:
 
 
 def _ref_params_for_modes(args, modes: List[str]):
-    cur = _channels_for_keep(args.keep_channels)
+    cur = _current_channel_names(args.keep_channels)
+
+    need_ref = any((m or "").lower() in ("ref", "cz_ref", "channel_ref") for m in modes)
+    need_lap = any((m or "").lower() in ("laplacian", "lap", "local") for m in modes)
 
     ref_idx = None
-    lap_neighbors = None
-    drop_idx = None
-
-    if any(m in ("ref", "cz_ref", "channel_ref") for m in modes):
+    if need_ref:
         m = name_to_index(cur)
         if args.ref_channel not in m:
             raise ValueError(f"ref_channel '{args.ref_channel}' not in channels: {cur}")
         ref_idx = m[args.ref_channel]
 
-    need_lap = args.laplacian or any(
-        m in ("laplacian", "lap", "local", "bipolar", "bip", "bipolar_nn") for m in modes
-    )
+    lap_neighbors = None
     if need_lap:
+        # neighbors projected onto current channel ordering
         lap_neighbors = neighbors_to_index_list(all_names=BCI2A_CH_NAMES, keep_names=cur)
 
-    if getattr(args, "drop_ref_channel", False):
-        m = name_to_index(cur)
-        if args.ref_channel not in m:
-            raise ValueError(f"ref_channel '{args.ref_channel}' not in channels: {cur}")
-        drop_idx = m[args.ref_channel]
-
-    return ref_idx, lap_neighbors, drop_idx
+    return ref_idx, lap_neighbors
 
 
 class ValRefMeanAccFromInputs(tf.keras.callbacks.Callback):
@@ -519,16 +499,14 @@ def run(args):
     results: Dict[str, Dict[str, List[float]]] = {c: {tm: [] for tm in test_modes} for c in train_conds}
 
     # ref params for in-place apply_reference used by jitter scaler/val
-    ref_idx, lap_neighbors, drop_idx = _ref_params_for_modes(args, list({*test_modes, *jitter_modes}))
+    ref_idx, lap_neighbors = _ref_params_for_modes(args, list({*test_modes, *jitter_modes}))
 
     for sub in range(1, args.n_sub + 1):
         # One split per subject (reused across all conditions)
         (X_base, y_base), _ = _load_train_and_test(args, sub, ref_mode_train="native", ref_mode_test="native")
 
-        args.n_channels = int(X_base.shape[1] - (1 if drop_idx is not None else 0))
+        args.n_channels = int(X_base.shape[1])
         args.in_samples = int(X_base.shape[2])
-
-        drop_channel_name = args.ref_channel if getattr(args, "drop_ref_channel", False) else None
 
         # --- Low-label protocol (optional)
         # We first choose a labeled pool (balanced per class), then split it into train/val.
@@ -579,7 +557,7 @@ def run(args):
                 # Fit scaler on mixed-ref pool from TRAIN split only (no leakage)
                 if args.standardize:
                     X_stats = np.concatenate(
-                        [apply_reference(X_tr_raw, mode=m, ref_idx=ref_idx, lap_neighbors=lap_neighbors, drop_idx=drop_idx) for m in jitter_modes],
+                        [apply_reference(X_tr_raw, mode=m, ref_idx=ref_idx, lap_neighbors=lap_neighbors) for m in jitter_modes],
                         axis=0,
                     )
                     mu_sd = fit_standardizer(X_stats)
@@ -594,7 +572,6 @@ def run(args):
                     ref_modes=jitter_modes,
                     ref_channel=args.ref_channel,
                     laplacian=args.laplacian,
-                    drop_ref_channel=getattr(args, "drop_ref_channel", False),
                     keep_channels=args.keep_channels,
                     mu=mu,
                     sd=sd,
@@ -603,21 +580,14 @@ def run(args):
                 )
 
                 # Validation data for Keras + extra metric across modes
-                X_va_base = apply_reference(
-                    X_va_raw,
-                    mode=jitter_modes[0] if len(jitter_modes) else "native",
-                    ref_idx=ref_idx,
-                    lap_neighbors=lap_neighbors,
-                    drop_idx=drop_idx,
-                )
                 if mu_sd is not None:
-                    X_va_fit = apply_standardizer(X_va_base, *mu_sd)
+                    X_va_fit = apply_standardizer(X_va_raw, *mu_sd)
                 else:
-                    X_va_fit = X_va_base.astype(np.float32, copy=False)
+                    X_va_fit = X_va_raw.astype(np.float32, copy=False)
 
                 val_inputs_by_mode: Dict[str, np.ndarray] = {}
                 for m in test_modes:
-                    Xv_m = apply_reference(X_va_raw, mode=m, ref_idx=ref_idx, lap_neighbors=lap_neighbors, drop_idx=drop_idx)
+                    Xv_m = apply_reference(X_va_raw, mode=m, ref_idx=ref_idx, lap_neighbors=lap_neighbors)
                     if mu_sd is not None:
                         Xv_m = apply_standardizer(Xv_m, *mu_sd)
                     val_inputs_by_mode[m] = _reshape_for_model(Xv_m)
@@ -644,7 +614,7 @@ def run(args):
                 ref_ids_va = []
 
                 for mid, m in enumerate(train_modes):
-                    (Xm_all, ym_all), _ = _load_train_and_test(args, sub, ref_mode_train=m, ref_mode_test=m, drop_channel=drop_channel_name)
+                    (Xm_all, ym_all), _ = _load_train_and_test(args, sub, ref_mode_train=m, ref_mode_test=m)
                     if len(ym_all) != len(y_base):
                         raise RuntimeError(f"Sample count mismatch for mode '{m}' (got {len(ym_all)} vs base {len(y_base)})")
                     if not np.array_equal(ym_all, y_base):
@@ -689,7 +659,7 @@ def run(args):
                 weights_path = _pick_eval_weights(args, train_out_dir, weights_path)
 
             else:
-                (Xc_all, yc_all), _ = _load_train_and_test(args, sub, ref_mode_train=cond, ref_mode_test=cond, drop_channel=drop_channel_name)
+                (Xc_all, yc_all), _ = _load_train_and_test(args, sub, ref_mode_train=cond, ref_mode_test=cond)
                 if len(yc_all) != len(y_base):
                     raise RuntimeError(f"Sample count mismatch for mode '{cond}' (got {len(yc_all)} vs base {len(y_base)})")
                 if not np.array_equal(yc_all, y_base):
@@ -724,7 +694,7 @@ def run(args):
             # Evaluate across test reference modes, using the SAME mu_sd (if any)
             y_te_base = None
             for te_mode in test_modes:
-                X_te_raw, y_te = _load_test_only(args, sub, ref_mode_test=te_mode, drop_channel=drop_channel_name)
+                X_te_raw, y_te = _load_test_only(args, sub, ref_mode_test=te_mode)
                 if y_te_base is None:
                     y_te_base = y_te
                 elif not np.array_equal(y_te, y_te_base):
@@ -775,7 +745,14 @@ def parse_args():
 
     # reference / channel control
     p.add_argument("--train_ref_modes", type=str, default="native", help="Comma-separated train mode(s).")
-    p.add_argument("--test_ref_modes", type=str, default="native,car,ref,laplacian", help="Comma-separated test modes.")
+    # Default excludes monopolar re-reference ("ref") to avoid the known
+    # constant-zero channel confound unless the user explicitly opts in.
+    p.add_argument(
+        "--test_ref_modes",
+        type=str,
+        default="native,car,laplacian,bipolar,gs,median",
+        help="Comma-separated test modes. Add 'ref' explicitly if you want monopolar re-referencing.",
+    )
     p.add_argument("--mix_train_refs", action="store_true", help="Train on a mixture (concatenation) of all train_ref_modes.")
     p.add_argument("--jitter_train_refs", action="store_true", help="Train with per-sample reference jitter (no concatenation).")
     p.add_argument("--jitter_ref_modes", type=str, default="", help="Comma-separated modes used for jitter. If empty, uses train_ref_modes.")
