@@ -24,8 +24,55 @@ Note: monopolar re-referencing can create a constant-zero channel for the refere
 - `src/datamodules/` : reference transforms + data loading
 - `train_ssl.py`, `finetune.py` : optional SSL workflows
 
+## Analysis utilities
+
+These scripts are for mechanistic checks and sanity audits. They do not change training.
+
+1) Operator geometry (linear structure)
+
+```bash
+python analysis/operator_geometry.py \
+  --ref_modes native,car,laplacian,bipolar,gs,median \
+  --keep_channels CANON_CHS_18 \
+  --out_dir /kaggle/working/analysis/operator_geom
+```
+
+This writes a JSON summary and prints key diagnostics (rank, idempotence, principal angles).
+It also reports a least-squares *linear* approximation error for non-linear refs (median, gs).
+
+2) Feature shift audit (spectral + spatial summaries)
+
+```bash
+python analysis/feature_shift_audit.py \
+  --data_root "$DATA_ROOT" \
+  --subject 1 \
+  --ref_modes native,car,laplacian,bipolar,gs,median \
+  --standardize_mode none \
+  --keep_channels CANON_CHS_18 \
+  --split test \
+  --out_dir /kaggle/working/analysis/feature_shift_sub01
+```
+
+This outputs per-mode feature arrays and a pairwise distance matrix over modes.
+
+3) Embedding drift (post-hoc representation stability)
+
+```bash
+python analysis/embedding_drift.py \
+  --data_root "$DATA_ROOT" \
+  --subject 1 \
+  --ref_modes native,car,laplacian,bipolar,gs,median \
+  --standardize_mode instance \
+  --results_dir "$RESULTS_ROOT/jittermix_stdtrain" \
+  --which best \
+  --keep_channels CANON_CHS_18 \
+  --out_dir /kaggle/working/analysis/embedding_drift_sub01
+```
+
+This loads a checkpoint, extracts `ssl_feat` embeddings, and writes pairwise cosine
+similarity statistics across reference modes.
+
 Start with:
 - `python gate_reference.py --help`
 
-Status: active research repo supporting a draft paper# Reference-Invariant-MI-Net-updated
-# Reference-Invariant-MI-Net-updated
+Status: active research repo supporting a draft paper
