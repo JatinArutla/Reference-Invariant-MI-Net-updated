@@ -34,6 +34,20 @@ Notes
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Ensure repo root (the directory containing 'src') is on sys.path,
+# even if this script is executed from a nested path after zip extraction.
+_HERE = os.path.abspath(os.path.dirname(__file__))
+_cand = _HERE
+for _ in range(6):
+    if os.path.isdir(os.path.join(_cand, "src")):
+        if _cand not in sys.path:
+            sys.path.insert(0, _cand)
+        break
+    _cand = os.path.dirname(_cand)
+
 import argparse
 import csv
 import json
@@ -120,12 +134,12 @@ def _slope_and_residual_peaks(
 
 def _laplacian_energy(X: np.ndarray, neighbors: List[List[int]]) -> float:
     """Mean squared laplacian output, averaged over channels and time."""
-    Y = apply_reference(X[None, ...], ref_mode="laplacian", laplacian_neighbors=neighbors)[0]
+    Y = apply_reference(X[None, ...], mode="laplacian", lap_neighbors=neighbors)[0]
     return float(np.mean(Y**2))
 
 
 def _bipolar_energy(X: np.ndarray, neighbors: List[List[int]]) -> float:
-    Y = apply_reference(X[None, ...], ref_mode="bipolar", laplacian_neighbors=neighbors)[0]
+    Y = apply_reference(X[None, ...], mode="bipolar", lap_neighbors=neighbors)[0]
     return float(np.mean(Y**2))
 
 
@@ -169,6 +183,7 @@ def main():
         help="Use 'none' or 'instance' to keep this audit about referencing, not train-fit stats.",
     )
     ap.add_argument("--keep_channels", type=str, default=None)
+    ap.add_argument("--ref_channel", type=str, default="Cz")
     ap.add_argument(
         "--channels",
         type=str,
@@ -191,8 +206,8 @@ def main():
         keep_names = [BCI2A_CH_NAMES[i] for i in keep_idx]
 
     # neighbor lists in kept montage
-    lap_nb = neighbors_to_index_list(BCI2A_CH_NAMES, keep_names, mode="laplacian")
-    bip_nb = neighbors_to_index_list(BCI2A_CH_NAMES, keep_names, mode="bipolar_nn")
+    lap_nb = neighbors_to_index_list(all_names=BCI2A_CH_NAMES, keep_names=keep_names, sort_by_distance=False)
+    bip_nb = neighbors_to_index_list(all_names=BCI2A_CH_NAMES, keep_names=keep_names, sort_by_distance=True)
 
     # channel indices for PSD metrics
     ch_list = _parse_list(args.channels) or []
@@ -205,15 +220,16 @@ def main():
 
     # Load *native, unstandardized* once so every mode starts from identical trials.
     # We then apply reference + (optional) standardization ourselves in a controlled way.
-    Xtr0, _, Xte0, _ = load_subject_dependent(
-        data_root=args.data_root,
-        subject=args.subject,
-        ref_mode="native",
-        standardize_mode="none",
-        laplacian_neighbors=lap_nb,
-        keep_idx=keep_idx,
-        seed=args.seed,
-    )
+    (Xtr0, _ytr0), (Xte0, _yte0) = load_subject_dependent(
+    args.data_root,
+    args.subject,
+    ea=False,
+    standardize=False,
+    ref_mode="native",
+    keep_channels=args.keep_channels,
+    ref_channel=args.ref_channel,
+    laplacian=True,
+)
 
     # Optional subsampling indices are chosen once and reused across modes.
     if args.split == "train":
@@ -256,8 +272,8 @@ def main():
 
     for mode in modes:
         # Apply reference transform to identical underlying trials.
-        Xtr_m = apply_reference(base_train, ref_mode=mode, laplacian_neighbors=lap_nb)
-        Xte_m = None if base_test is None else apply_reference(base_test, ref_mode=mode, laplacian_neighbors=lap_nb)
+        Xtr_m = apply_reference(base_train, mode=mode, lap_neighbors=lap_nb)
+        Xte_m = None if base_test is None else apply_reference(base_test, mode=mode, lap_neighbors=lap_nb)
 
         if args.standardize_mode == "instance":
             Xtr_m = _std_instance(Xtr_m)

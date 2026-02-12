@@ -31,6 +31,20 @@ python analysis/operator_geometry.py \
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Ensure repo root (the directory containing 'src') is on sys.path,
+# even if this script is executed from a nested path after zip extraction.
+_HERE = os.path.abspath(os.path.dirname(__file__))
+_cand = _HERE
+for _ in range(6):
+    if os.path.isdir(os.path.join(_cand, "src")):
+        if _cand not in sys.path:
+            sys.path.insert(0, _cand)
+        break
+    _cand = os.path.dirname(_cand)
+
 import argparse
 import json
 from dataclasses import asdict, dataclass
@@ -159,7 +173,7 @@ def _fit_linear_operator_from_data(
     data_root: str,
     subject: int,
     ref_mode: str,
-    keep_idx: Optional[List[int]],
+    keep_channels: Optional[str],
     laplacian_neighbors: List[List[int]],
     seed: int,
     max_trials: int,
@@ -172,14 +186,15 @@ def _fit_linear_operator_from_data(
     """
 
     # Load both train + test, then subsample for speed.
-    Xtr, ytr, Xte, yte = load_subject_dependent(
-        data_root=data_root,
-        subject=subject,
+    (Xtr, _ytr), (Xte, _yte) = load_subject_dependent(
+        data_root,
+        subject,
+        ea=False,
+        standardize=False,
         ref_mode="native",
-        standardize_mode="none",
-        laplacian_neighbors=laplacian_neighbors,
-        keep_idx=keep_idx,
-        seed=seed,
+        keep_channels=keep_channels,
+        ref_channel="Cz",
+        laplacian=True,
     )
     X = np.concatenate([Xtr, Xte], axis=0)
     if max_trials and X.shape[0] > max_trials:
@@ -188,7 +203,7 @@ def _fit_linear_operator_from_data(
         X = X[idx]
 
     # Apply the reference transform to get Y.
-    Y = apply_reference(X, ref_mode=ref_mode, laplacian_neighbors=laplacian_neighbors)
+    Y = apply_reference(X, mode=ref_mode, lap_neighbors=laplacian_neighbors)
 
     # Stack timepoints: X_flat: [C, N*T]
     Xf = np.transpose(X, (1, 0, 2)).reshape(X.shape[1], -1).astype(np.float64)
@@ -238,16 +253,8 @@ def main():
         keep_names = [BCI2A_CH_NAMES[i] for i in keep_idx]
 
     # Neighbors projected onto kept montage.
-    lap_nb = neighbors_to_index_list(
-        all_names=BCI2A_CH_NAMES,
-        keep_names=keep_names,
-        mode="laplacian",
-    )
-    bip_nb = neighbors_to_index_list(
-        all_names=BCI2A_CH_NAMES,
-        keep_names=keep_names,
-        mode="bipolar_nn",
-    )
+    lap_nb = neighbors_to_index_list(all_names=BCI2A_CH_NAMES, keep_names=keep_names, sort_by_distance=False)
+    bip_nb = neighbors_to_index_list(all_names=BCI2A_CH_NAMES, keep_names=keep_names, sort_by_distance=True)
 
     op_mats: Dict[str, np.ndarray] = {}
     stats: List[OperatorStats] = []
@@ -283,7 +290,7 @@ def main():
                     data_root=args.data_root,
                     subject=args.subject,
                     ref_mode=m_key,
-                    keep_idx=keep_idx,
+                    keep_channels=args.keep_channels,
                     laplacian_neighbors=lap_nb,
                     seed=args.seed,
                     max_trials=args.max_trials,
@@ -301,7 +308,7 @@ def main():
         mu, sd = _energy_stats(A)
         stats.append(
             OperatorStats(
-                mode=m_key,
+                ref_mode=m_key,
                 C=C,
                 rank=r,
                 null_dim=C - r,

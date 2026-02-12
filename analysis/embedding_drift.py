@@ -19,6 +19,20 @@ implementation when `return_ssl_feat=True`.
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Ensure repo root (the directory containing 'src') is on sys.path,
+# even if this script is executed from a nested path after zip extraction.
+_HERE = os.path.abspath(os.path.dirname(__file__))
+_cand = _HERE
+for _ in range(6):
+    if os.path.isdir(os.path.join(_cand, "src")):
+        if _cand not in sys.path:
+            sys.path.insert(0, _cand)
+        break
+    _cand = os.path.dirname(_cand)
+
 import argparse
 import json
 import os
@@ -91,6 +105,7 @@ def main():
         help="For embedding drift, 'instance' is usually the cleanest.",
     )
     ap.add_argument("--keep_channels", type=str, default=None)
+    ap.add_argument("--ref_channel", type=str, default="Cz")
     ap.add_argument("--split", type=str, default="test", choices=["train", "test"])
     ap.add_argument("--max_trials", type=int, default=0)
     ap.add_argument("--seed", type=int, default=1)
@@ -115,18 +130,19 @@ def main():
     else:
         keep_names = [BCI2A_CH_NAMES[i] for i in keep_idx]
 
-    lap_nb = neighbors_to_index_list(BCI2A_CH_NAMES, keep_names, mode="laplacian")
+    lap_nb = neighbors_to_index_list(all_names=BCI2A_CH_NAMES, keep_names=keep_names, sort_by_distance=True)
 
     # Load native base once (unstandardized). We'll apply reference + standardization ourselves.
-    Xtr0, _, Xte0, _ = load_subject_dependent(
-        data_root=args.data_root,
-        subject=args.subject,
-        ref_mode="native",
-        standardize_mode="none",
-        laplacian_neighbors=lap_nb,
-        keep_idx=keep_idx,
-        seed=args.seed,
-    )
+    (Xtr0, _ytr0), (Xte0, _yte0) = load_subject_dependent(
+    args.data_root,
+    args.subject,
+    ea=False,
+    standardize=False,
+    ref_mode="native",
+    keep_channels=args.keep_channels,
+    ref_channel=args.ref_channel,
+    laplacian=True,
+)
 
     if args.split == "train":
         base = Xtr0
@@ -141,7 +157,7 @@ def main():
     # Apply each reference to the same underlying trials
     X_by_mode: Dict[str, np.ndarray] = {}
     for mode in modes:
-        X_by_mode[mode] = apply_reference(base, ref_mode=mode, laplacian_neighbors=lap_nb)
+        X_by_mode[mode] = apply_reference(base, mode=mode, lap_neighbors=lap_nb)
 
     # Standardization
     if args.standardize_mode == "instance":
@@ -150,7 +166,7 @@ def main():
         # Fit stats per mode on the *train* split for that mode, then apply to chosen split.
         # This matches your typical evaluation but can confound cross-mode comparisons.
         for mode in modes:
-            Xtr_m = apply_reference(Xtr0, ref_mode=mode, laplacian_neighbors=lap_nb)
+            Xtr_m = apply_reference(Xtr0, mode=mode, lap_neighbors=lap_nb)
             _, X_m = _std_trainfit(Xtr_m, X_by_mode[mode])
             X_by_mode[mode] = X_m
 
