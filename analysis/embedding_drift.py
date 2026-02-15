@@ -79,18 +79,60 @@ def _resolve_weights(args) -> str:
         return args.weights_path
     if not args.results_dir:
         raise ValueError("Provide --weights_path or --results_dir")
-    sub_dir = os.path.join(args.results_dir, f"SUBJ_{args.subject:02d}")
     fname = "best.weights.h5" if args.which == "best" else "last.weights.h5"
-    cand = os.path.join(sub_dir, fname)
-    if not os.path.exists(cand):
-        raise FileNotFoundError(f"Could not find weights: {cand}")
-    return cand
+
+    # 0) If user points results_dir directly at a training folder, accept it.
+    direct = os.path.join(args.results_dir, fname)
+    if os.path.exists(direct):
+        return direct
+
+    # 1) SSL-style naming: <results_dir>/SUBJ_XX/{best,last}.weights.h5
+    ssl_style = os.path.join(args.results_dir, f"SUBJ_{args.subject:02d}", fname)
+    if os.path.exists(ssl_style):
+        return ssl_style
+
+    # 2) gate_reference-style naming: <results_dir>/sub_XX/train_<cond>/{best,last}.weights.h5
+    sub_root = os.path.join(args.results_dir, f"sub_{args.subject:02d}")
+    if args.cond:
+        gate_style = os.path.join(sub_root, f"train_{args.cond}", fname)
+        if os.path.exists(gate_style):
+            return gate_style
+
+    # 3) Auto-detect if there's exactly one train_* folder with weights
+    if os.path.isdir(sub_root):
+        cand_train = []
+        for d in sorted(os.listdir(sub_root)):
+            if not d.startswith("train_"):
+                continue
+            p = os.path.join(sub_root, d, fname)
+            if os.path.exists(p):
+                cand_train.append(p)
+        if len(cand_train) == 1:
+            return cand_train[0]
+        if len(cand_train) > 1:
+            raise FileNotFoundError(
+                "Multiple candidate checkpoints found under "
+                f"{sub_root}. Provide --cond (e.g. native, car, laplacian, ...) or use --weights_path.\n"
+                "Candidates:\n  " + "\n  ".join(cand_train)
+            )
+
+    raise FileNotFoundError(
+        "Could not resolve weights from --results_dir. Provide --weights_path, or point --results_dir at a train_* folder, "
+        "or provide --cond for gate_reference outputs. Tried:\n"
+        f"  {direct}\n  {ssl_style}\n  {os.path.join(sub_root, 'train_<cond>', fname)}"
+    )
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data_root", type=str, required=True)
     ap.add_argument("--subject", type=int, default=1)
+    ap.add_argument(
+        "--cond",
+        type=str,
+        default="",
+        help="Training condition name for gate_reference outputs (e.g. native, car, laplacian). Only needed if --results_dir contains multiple train_* folders.",
+    )
     ap.add_argument(
         "--ref_modes",
         type=str,

@@ -83,12 +83,15 @@ def _parse_floats(s: str) -> List[float]:
 
 
 def _resolve_gate_weights(results_dir: str, subject: int, cond: str, which: str) -> str:
-    sub_dir = os.path.join(results_dir, f"SUBJ_{int(subject):02d}", f"train_{cond}")
     fname = "best.weights.h5" if which == "best" else "last.weights.h5"
-    path = os.path.join(sub_dir, fname)
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Could not find weights: {path}")
-    return path
+    cand_paths = [
+        os.path.join(results_dir, f"sub_{int(subject):02d}", f"train_{cond}", fname),
+        os.path.join(results_dir, f"SUBJ_{int(subject):02d}", f"train_{cond}", fname),
+    ]
+    for p in cand_paths:
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError("Could not find weights. Tried:\n  " + "\n  ".join(cand_paths))
 
 
 def _std_apply(mode: str, X: np.ndarray, mu_sd: Optional[Tuple[np.ndarray, np.ndarray]], robust: bool) -> np.ndarray:
