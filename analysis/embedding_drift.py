@@ -218,13 +218,26 @@ def main():
             _, X_m = _std_trainfit(Xtr_m, X_by_mode[mode])
             X_by_mode[mode] = X_m
 
+    # # Build embedding model
+    # n_ch = X_by_mode[modes[0]].shape[1]
+    # model = build_atcnet(
+    #     n_chans=n_ch,
+    #     n_classes=4,
+    #     return_ssl_feat=True,
+    #     seed=args.seed,
+    # )
     # Build embedding model
-    n_ch = X_by_mode[modes[0]].shape[1]
+    n_ch = int(X_by_mode[modes[0]].shape[1])
+    n_samp = int(X_by_mode[modes[0]].shape[2])
+
+    import tensorflow as tf
+    tf.random.set_seed(args.seed)
+
     model = build_atcnet(
-        n_chans=n_ch,
         n_classes=4,
+        in_chans=n_ch,
+        in_samples=n_samp,
         return_ssl_feat=True,
-        seed=args.seed,
     )
 
     weights_path = _resolve_weights(args)
