@@ -286,6 +286,7 @@ def _ref_params_for_modes(args, modes: List[str]):
     cur = _current_channel_names(args.keep_channels)
 
     need_ref = any((m or "").lower() in ("ref", "cz_ref", "channel_ref") for m in modes)
+    need_bip_root = any((m or "").lower() in ("bipolar", "bip", "bipolar_like") for m in modes)
     need_lap = any(
         (m or "").lower() in (
             "laplacian", "lap", "local",
@@ -297,11 +298,11 @@ def _ref_params_for_modes(args, modes: List[str]):
     )
 
     ref_idx = None
-    if need_ref:
+    if need_ref or need_bip_root:
         m = name_to_index(cur)
         if args.ref_channel not in m:
             raise ValueError(f"ref_channel '{args.ref_channel}' not in channels: {cur}")
-        ref_idx = m[args.ref_channel]
+        ref_idx = int(m[args.ref_channel])
 
     lap_neighbors = None
     if need_lap:

@@ -59,14 +59,18 @@ def load_bci2a_session(
         X = subset_and_reorder(X, keep_idx)
 
     # Optional: re-reference before any EA/standardization
+    # ref_idx is needed for:
+    #   - explicit channel referencing (mode='ref')
+    #   - bipolar root selection (tree + 2-cycle bipolar uses a root channel)
     ref_idx = None
-    if (ref_mode or "").lower() in ("ref", "cz_ref", "channel_ref"):
+    rm = (ref_mode or "").lower()
+    if rm in ("ref", "cz_ref", "channel_ref", "bipolar", "bip", "bipolar_like"):
         # Map ref channel name to index in the current channel order
         current_names = keep_names if keep_names is not None else BCI2A_CH_NAMES
         ref_map = name_to_index(current_names)
         if ref_channel not in ref_map:
             raise ValueError(f"ref_channel '{ref_channel}' not in channels: {current_names}")
-        ref_idx = ref_map[ref_channel]
+        ref_idx = int(ref_map[ref_channel])
 
     lap_neighbors = None
     # Some reference operators require a neighbor graph.

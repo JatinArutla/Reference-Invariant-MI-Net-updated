@@ -130,6 +130,12 @@ def main():
     else:
         keep_names = [BCI2A_CH_NAMES[i] for i in keep_idx]
 
+    # ref_idx is needed for modes like 'ref' and for bipolar root selection
+    name_to_i = name_to_index(keep_names)
+    if args.ref_channel not in name_to_i:
+        raise ValueError(f"ref_channel '{args.ref_channel}' not in channels: {keep_names}")
+    ref_idx = int(name_to_i[args.ref_channel])
+
     lap_nb = neighbors_to_index_list(all_names=BCI2A_CH_NAMES, keep_names=keep_names, sort_by_distance=True)
 
     # Load native base once (unstandardized). We'll apply reference + standardization ourselves.
@@ -157,7 +163,7 @@ def main():
     # Apply each reference to the same underlying trials
     X_by_mode: Dict[str, np.ndarray] = {}
     for mode in modes:
-        X_by_mode[mode] = apply_reference(base, mode=mode, lap_neighbors=lap_nb)
+        X_by_mode[mode] = apply_reference(base, mode=mode, ref_idx=ref_idx, lap_neighbors=lap_nb)
 
     # Standardization
     if args.standardize_mode == "instance":
@@ -166,7 +172,7 @@ def main():
         # Fit stats per mode on the *train* split for that mode, then apply to chosen split.
         # This matches your typical evaluation but can confound cross-mode comparisons.
         for mode in modes:
-            Xtr_m = apply_reference(Xtr0, mode=mode, lap_neighbors=lap_nb)
+            Xtr_m = apply_reference(Xtr0, mode=mode, ref_idx=ref_idx, lap_neighbors=lap_nb)
             _, X_m = _std_trainfit(Xtr_m, X_by_mode[mode])
             X_by_mode[mode] = X_m
 

@@ -63,12 +63,20 @@ class RefJitterSequence(Sequence):
         )
 
         # map ref_channel to index in current channel list
+        # needed for:
+        #   - mode='ref'
+        #   - mode='bipolar' root selection (tree + 2-cycle)
         self.ref_idx = None
-        if "ref" in self.ref_modes:
+        modes_lower = [m.lower() for m in self.ref_modes]
+        need_root = any(
+            mm in ("ref", "cz_ref", "channel_ref", "bipolar", "bip", "bipolar_like")
+            for mm in modes_lower
+        )
+        if need_root:
             name_to_i = {n: i for i, n in enumerate(self.current_names)}
             if ref_channel not in name_to_i:
                 raise ValueError(f"ref_channel '{ref_channel}' not in current channel set")
-            self.ref_idx = name_to_i[ref_channel]
+            self.ref_idx = int(name_to_i[ref_channel])
 
         # Optional standardization applied AFTER reference transform.
         # - train: use provided mu/sd (computed on training split)
