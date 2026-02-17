@@ -123,7 +123,7 @@ def _maybe_plot(out_png: str, xs: List[float], ys: List[float], title: str) -> N
     plt.ylabel("accuracy")
     plt.title(title)
     plt.grid(True, alpha=0.3)
-    plt.savefig(out_png, bbox_inches="tight", dpi=160)
+    plt.savefig(out_png, bbox_inches="tight", dpi=450)
     plt.close()
 
 
